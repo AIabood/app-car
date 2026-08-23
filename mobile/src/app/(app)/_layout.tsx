@@ -65,6 +65,14 @@ export default function AppLayout() {
           ),
         }}
       />
+      {/* Hidden screen - no tab bar button */}
+      <Tabs.Screen
+        name="trip-details"
+        options={{
+          href: null, // Exclude from tab bar
+          title: 'Trip Details',
+        }}
+      />
     </Tabs>
   );
 }

@@ -25,6 +25,17 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
+## Mapbox
+
+Native map builds require a public Mapbox access token. Set it before starting Expo:
+
+```bash
+$env:EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN="pk.your-token"
+npx expo start
+```
+
+The web build shows a platform-safe map preview because Mapbox Native SDK is not supported on web.
+
 ## Get a fresh project
 
 When you're ready, run:

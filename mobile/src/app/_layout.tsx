@@ -25,22 +25,17 @@ function RootLayoutNav() {
         contentStyle: {
           backgroundColor: colors.white,
         },
-        animationEnabled: true,
       }}
     >
       {isAuthenticated ? (
         <Stack.Screen
           name="(app)"
-          options={{
-            animationEnabled: false,
-          }}
+          options={{}}
         />
       ) : (
         <Stack.Screen
           name="(auth)"
-          options={{
-            animationEnabled: false,
-          }}
+          options={{}}
         />
       )}
     </Stack>
