@@ -15,6 +15,7 @@ import { AppButton } from '@/components/ui/AppButton';
 import { AppInput } from '@/components/ui/AppInput';
 import { ErrorMessage } from '@/components/ui/ErrorMessage';
 import { useAuth } from '@/context/AuthContext';
+import { ApiError } from '@/services/api';
 import {
   validateName,
   validateEmail2,
@@ -70,7 +71,14 @@ export default function RegisterScreen() {
       await register(name, email, password);
       router.replace('/(app)');
     } catch (error) {
-      setGeneralError('Registration failed. Please try again.');
+      if (error instanceof ApiError) {
+        // Surface exact backend message (e.g. "Email already registered")
+        setGeneralError(error.message);
+      } else if (error instanceof Error) {
+        setGeneralError(error.message);
+      } else {
+        setGeneralError('An unexpected error occurred. Please try again.');
+      }
     }
   };
 

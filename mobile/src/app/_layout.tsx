@@ -1,10 +1,12 @@
 /**
  * Root Layout
- * Authentication-aware routing for the entire app
+ * Authentication-aware routing for the entire app.
+ * Shows a loading screen while the session is being restored from storage.
  */
 
 import React, { useEffect } from 'react';
-import { Stack } from 'expo-router';
+import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { Stack, Redirect } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { colors } from '@/constants/colors';
@@ -12,11 +14,23 @@ import { colors } from '@/constants/colors';
 SplashScreen.preventAutoHideAsync();
 
 function RootLayoutNav() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
 
   useEffect(() => {
-    SplashScreen.hideAsync();
-  }, []);
+    // Only hide the splash screen once the auth state is determined
+    if (!isLoading) {
+      SplashScreen.hideAsync();
+    }
+  }, [isLoading]);
+
+  // While checking AsyncStorage / calling /me, keep the splash screen up
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
 
   return (
     <Stack
@@ -49,3 +63,12 @@ export default function RootLayout() {
     </AuthProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.white,
+  },
+});

@@ -87,7 +87,7 @@ export default function MapScreen() {
 
   // Navigation Simulator Loop
   useEffect(() => {
-    let timer: NodeJS.Timeout;
+    let timer: ReturnType<typeof setTimeout>;
     if (isNavigating) {
       // Initial instruction
       const instructions = [

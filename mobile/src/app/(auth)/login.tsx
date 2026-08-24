@@ -8,7 +8,6 @@ import {
   StyleSheet,
   View,
   Text,
-  ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Screen } from '@/components/layout/Screen';
@@ -16,6 +15,7 @@ import { AppButton } from '@/components/ui/AppButton';
 import { AppInput } from '@/components/ui/AppInput';
 import { ErrorMessage } from '@/components/ui/ErrorMessage';
 import { useAuth } from '@/context/AuthContext';
+import { ApiError } from '@/services/api';
 import { validateEmail2, validatePassword } from '@/utils/validation';
 import { colors } from '@/constants/colors';
 import { spacing } from '@/constants/spacing';
@@ -37,16 +37,12 @@ export default function LoginScreen() {
     setPasswordError('');
     setGeneralError('');
 
-    // Validate
+    // Validate fields before hitting the network
     const emailErr = validateEmail2(email);
     const passwordErr = validatePassword(password);
 
-    if (emailErr) {
-      setEmailError(emailErr);
-    }
-    if (passwordErr) {
-      setPasswordError(passwordErr);
-    }
+    if (emailErr) setEmailError(emailErr);
+    if (passwordErr) setPasswordError(passwordErr);
 
     if (emailErr || passwordErr) {
       return;
@@ -56,7 +52,14 @@ export default function LoginScreen() {
       await login(email, password);
       router.replace('/(app)');
     } catch (error) {
-      setGeneralError('Login failed. Please try again.');
+      if (error instanceof ApiError) {
+        // Surface the exact backend message (e.g. "Invalid credentials")
+        setGeneralError(error.message);
+      } else if (error instanceof Error) {
+        setGeneralError(error.message);
+      } else {
+        setGeneralError('An unexpected error occurred. Please try again.');
+      }
     }
   };
 
@@ -133,7 +136,7 @@ export default function LoginScreen() {
       />
 
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Don't have an account?</Text>
+        <Text style={styles.footerText}>Don&apos;t have an account?</Text>
         <AppButton
           title="Create Account"
           onPress={handleCreateAccount}
