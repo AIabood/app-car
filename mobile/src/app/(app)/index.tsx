@@ -1,3 +1,15 @@
+/**
+ * MapScreen (Main App Screen)
+ *
+ * Manages:
+ *  - Search & destination selection
+ *  - userLocation  = real GPS from expo-location
+ *  - simulationLocation = interpolated position used during navigation MVP simulation
+ *  - Navigation HUD, speedometer, instructions
+ *
+ * MapSurface receives props and handles only rendering.
+ */
+
 import { useState, useEffect, useRef } from 'react';
 import {
   Pressable,
@@ -9,18 +21,28 @@ import {
   SafeAreaView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import MapSurface from '@/components/map-surface';
+import * as Location from 'expo-location';
+import MapSurface, { FALLBACK_LOCATION, Coordinates } from '@/components/map-surface';
 import { colors } from '@/constants/colors';
 import { spacing } from '@/constants/spacing';
 import { typography } from '@/constants/typography';
-import { MOCK_LOCATIONS, MockLocation } from '@/constants/mock-locations';
+import { MOCK_LOCATIONS, AppLocation } from '@/constants/mock-locations';
 
 export default function MapScreen() {
   const [search, setSearch] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [selectedLocation, setSelectedLocation] = useState<MockLocation | null>(null);
+  const [selectedLocation, setSelectedLocation] = useState<AppLocation | null>(null);
 
-  // Navigation simulation states
+  // ── Real GPS location (preserved throughout session) ──────────────────────
+  const [userLocation, setUserLocation] = useState<Coordinates>(FALLBACK_LOCATION);
+
+  // ── Simulation: interpolated position used ONLY during navigation MVP ─────
+  const [simulationLocation, setSimulationLocation] = useState<Coordinates | null>(null);
+
+  // Trigger map re-center (incremented by Locate Me button)
+  const [recenterTrigger, setRecenterTrigger] = useState(0);
+
+  // ── Navigation simulation states ──────────────────────────────────────────
   const [isNavigating, setIsNavigating] = useState(false);
   const [navigationProgress, setNavigationProgress] = useState(0);
   const [speed, setSpeed] = useState(0);
@@ -28,16 +50,39 @@ export default function MapScreen() {
   const [remainingMinutes, setRemainingMinutes] = useState(0);
   const [currentInstruction, setCurrentInstruction] = useState('');
 
+  // Store start location for interpolation (captured when navigation begins)
+  const navStartLocation = useRef<Coordinates>(FALLBACK_LOCATION);
+
   const searchInputRef = useRef<TextInput>(null);
 
-  // Filter locations based on search query
+  // ── Fetch GPS on mount ────────────────────────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        // Permission denied — keep Riyadh fallback
+        return;
+      }
+      try {
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        setUserLocation({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+        });
+      } catch {
+        // Could not retrieve location — keep fallback
+      }
+    })();
+  }, []);
+
+  // ── Filter locations based on search query ─────────────────────────────────
   const filteredLocations = MOCK_LOCATIONS.filter(
     (loc) =>
       loc.nameAr.toLowerCase().includes(search.toLowerCase()) ||
       loc.nameEn.toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleSelectLocation = (loc: MockLocation) => {
+  const handleSelectLocation = (loc: AppLocation) => {
     setSelectedLocation(loc);
     setSearch(loc.nameAr);
     setShowSuggestions(false);
@@ -50,80 +95,105 @@ export default function MapScreen() {
     setShowSuggestions(false);
   };
 
-  const handleLocateMe = () => {
-    setSelectedLocation(null);
-    setSearch('');
-    // Animate search with a temporary hint
-    alert('تم تحديد موقعك الحالي بنجاح على الخارطة 📍');
+  // ── Locate Me: refresh GPS and re-center map ───────────────────────────────
+  const handleLocateMe = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const updated: Coordinates = {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      };
+      setUserLocation(updated);
+    } catch {
+      // keep current userLocation
+    }
+    // Bump trigger to animate camera in MapSurface
+    setRecenterTrigger((n) => n + 1);
   };
 
-  // Start Navigation Simulation
+  // ── Start Navigation Simulation ────────────────────────────────────────────
   const startNavigation = () => {
+    // Capture the real user location as simulation start
+    navStartLocation.current = userLocation;
+    setSimulationLocation(userLocation);
+
     setIsNavigating(true);
     setNavigationProgress(0);
     setSpeed(0);
     setCurrentInstruction('اتجه نحو الشمال على طريق الملك فهد');
 
-    // Parse values from destination
     if (selectedLocation) {
       const distNum = parseFloat(selectedLocation.distance.replace(/[^0-9.]/g, ''));
       const timeNum = parseInt(selectedLocation.duration.replace(/[^0-9]/g, ''));
       setRemainingDistance(distNum);
       setRemainingMinutes(timeNum);
     } else {
-      // Free drive defaults
       setRemainingDistance(15.0);
       setRemainingMinutes(20);
     }
   };
 
-  // Stop Navigation Simulation
+  // ── Stop Navigation Simulation ─────────────────────────────────────────────
   const stopNavigation = () => {
     setIsNavigating(false);
     setNavigationProgress(0);
+    setSimulationLocation(null); // return to real userLocation marker
     setSelectedLocation(null);
     setSearch('');
   };
 
-  // Navigation Simulator Loop
+  // ── Navigation Simulator Loop ──────────────────────────────────────────────
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setInterval>;
+
     if (isNavigating) {
-      // Initial instruction
       const instructions = [
         'اتجه نحو الشمال على طريق الملك فهد',
         'بعد 500 متر، اسلك المخرج اليمين',
         'انعطف يميناً ثم تابع لمسافة 2 كم',
         'استمر مباشرة نحو وجهتك المحددة',
-        'لقد وصلت إلى وجهتك المقصودة!'
+        'لقد وصلت إلى وجهتك المقصودة!',
       ];
 
       timer = setInterval(() => {
         setNavigationProgress((prev) => {
-          const next = prev + 0.02; // Simulate 2% progress every second (takes 50s total)
+          const next = prev + 0.02; // ~50 seconds total
+
           if (next >= 1) {
             clearInterval(timer);
             setIsNavigating(false);
+            setSimulationLocation(null);
             alert('لقد وصلت إلى وجهتك بأمان! 🎉');
             return 0;
           }
 
-          // Dynamically change simulated speed (60 to 110 km/h)
+          // ── Interpolate simulation position ──────────────────────────────
+          if (selectedLocation) {
+            const interpLat =
+              navStartLocation.current.latitude +
+              (selectedLocation.latitude - navStartLocation.current.latitude) * next;
+            const interpLng =
+              navStartLocation.current.longitude +
+              (selectedLocation.longitude - navStartLocation.current.longitude) * next;
+            setSimulationLocation({ latitude: interpLat, longitude: interpLng });
+          }
+
+          // ── HUD updates ──────────────────────────────────────────────────
           const randomSpeed = Math.floor(60 + Math.random() * 50);
           setSpeed(randomSpeed);
 
-          // Update remaining distance and time
           if (selectedLocation) {
             const distTotal = parseFloat(selectedLocation.distance.replace(/[^0-9.]/g, ''));
             const timeTotal = parseInt(selectedLocation.duration.replace(/[^0-9]/g, ''));
             setRemainingDistance(Math.max(0, parseFloat((distTotal * (1 - next)).toFixed(1))));
             setRemainingMinutes(Math.max(0, Math.round(timeTotal * (1 - next))));
           } else {
-            setRemainingDistance((prevDist) => Math.max(0, parseFloat((prevDist - 0.1).toFixed(1))));
-            setRemainingMinutes((prevMin) => Math.max(0, prevMin - 1));
+            setRemainingDistance((d) => Math.max(0, parseFloat((d - 0.1).toFixed(1))));
+            setRemainingMinutes((m) => Math.max(0, m - 1));
           }
 
-          // Rotate instruction statements based on progress percentage
           const step = Math.floor(next * 5);
           if (step < instructions.length) {
             setCurrentInstruction(instructions[step]);
@@ -141,16 +211,18 @@ export default function MapScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Map Surface Background */}
+      {/* ── Map Surface ───────────────────────────────────────────────── */}
       <MapSurface
-        searchQuery={selectedLocation ? selectedLocation.nameAr : search}
+        userLocation={userLocation}
+        simulationLocation={simulationLocation}
         selectedLocation={selectedLocation}
         isNavigating={isNavigating}
         navigationProgress={navigationProgress}
         onSelectLocation={handleSelectLocation}
+        recenterTrigger={recenterTrigger}
       />
 
-      {/* TOP OVERLAYS - Hide while navigating */}
+      {/* ── TOP OVERLAYS — hidden during navigation ────────────────────── */}
       {!isNavigating && (
         <SafeAreaView style={styles.topContainer}>
           {/* Search Bar */}
@@ -206,7 +278,7 @@ export default function MapScreen() {
         </SafeAreaView>
       )}
 
-      {/* FLOATING ACTION BUTTONS - Hide while navigating */}
+      {/* ── FLOATING ACTION BUTTONS — hidden during navigation ─────────── */}
       {!isNavigating && (
         <View style={styles.floatingButtons}>
           <Pressable
@@ -219,7 +291,7 @@ export default function MapScreen() {
         </View>
       )}
 
-      {/* BOTTOM INFO PANEL / START DRIVE CARD */}
+      {/* ── BOTTOM INFO PANEL / START DRIVE CARD ───────────────────────── */}
       {!isNavigating && (
         <View style={styles.bottomCardContainer}>
           {selectedLocation ? (
@@ -272,7 +344,6 @@ export default function MapScreen() {
               <Text style={styles.welcomeTitle}>أهلاً بك في AppCar 👋</Text>
               <Text style={styles.welcomeSubtitle}>ابحث عن وجهة، أو ابدأ رحلة حرة لمراقبة القيادة</Text>
 
-              {/* Quick suggestion chips */}
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsScroll}>
                 {MOCK_LOCATIONS.slice(0, 3).map((loc) => (
                   <Pressable
@@ -298,7 +369,7 @@ export default function MapScreen() {
         </View>
       )}
 
-      {/* LIVE NAVIGATION HUD SIMULATOR OVERLAY */}
+      {/* ── LIVE NAVIGATION HUD ─────────────────────────────────────────── */}
       {isNavigating && (
         <SafeAreaView style={styles.hudOverlay}>
           {/* Top Instruction Banner */}
@@ -314,16 +385,14 @@ export default function MapScreen() {
 
           {/* Center Info HUD */}
           <View style={styles.hudCenterContainer}>
-            {/* Speedometer */}
             <View style={styles.speedometerCard}>
               <Text style={styles.speedNumber}>{speed}</Text>
               <Text style={styles.speedLabel}>كم / ساعة</Text>
             </View>
 
-            {/* GPS Signal Info */}
             <View style={styles.hudStatusBadge}>
               <View style={styles.greenIndicatorDot} />
-              <Text style={styles.hudStatusText}>محاكاة الملاحة النشطة</Text>
+              <Text style={styles.hudStatusText}>الملاحة نشطة</Text>
             </View>
           </View>
 
@@ -376,7 +445,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     height: 52,
     paddingHorizontal: spacing.md,
-    flexDirection: 'row-reverse', // Align Arabic content nicely
+    flexDirection: 'row-reverse',
     alignItems: 'center',
     gap: spacing.sm,
     backgroundColor: colors.white,
@@ -392,7 +461,7 @@ const styles = StyleSheet.create({
     flex: 1,
     color: colors.text,
     paddingVertical: 0,
-    textAlign: 'right', // Renders text search right-aligned for Arabic
+    textAlign: 'right',
   },
   clearIcon: {
     padding: 2,
@@ -449,7 +518,7 @@ const styles = StyleSheet.create({
   floatingButtons: {
     position: 'absolute',
     right: spacing.lg,
-    bottom: 250, // Floating above the bottom sheet
+    bottom: 250,
     gap: spacing.sm,
     zIndex: 90,
   },
