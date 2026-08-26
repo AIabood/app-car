@@ -1,17 +1,13 @@
 /**
  * MapSurface — Web Fallback
- *
- * react-native-maps is not supported on Web.
- * This file provides a simple mock grid UI for web builds.
- * It mirrors the props interface of map-surface.native.tsx
- * so that index.tsx compiles cleanly on all platforms.
  */
 
+import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/constants/colors';
 import { spacing } from '@/constants/spacing';
-import { AppLocation } from '@/constants/mock-locations';
+import { AppLocation } from '@/types/navigation';
 
 export const FALLBACK_LOCATION = {
   latitude: 24.7136,
@@ -24,11 +20,10 @@ export type Coordinates = {
 };
 
 type MapSurfaceProps = {
-  userLocation: Coordinates;
+  startLocation: AppLocation;
+  destination?: AppLocation | null;
   simulationLocation?: Coordinates | null;
-  selectedLocation?: AppLocation | null;
   isNavigating?: boolean;
-  navigationProgress?: number;
   onSelectLocation?: (loc: AppLocation) => void;
   recenterTrigger?: number;
 };
@@ -36,7 +31,6 @@ type MapSurfaceProps = {
 export default function MapSurface({ isNavigating }: MapSurfaceProps) {
   return (
     <View style={styles.mockContainer}>
-      {/* Grid Lines */}
       <View style={styles.gridOverlay}>
         <View style={[styles.roadLine, { left: '15%', height: '100%', width: 8 }]} />
         <View style={[styles.roadLine, { left: '35%', height: '100%', width: 14 }]} />
@@ -47,7 +41,6 @@ export default function MapSurface({ isNavigating }: MapSurfaceProps) {
         <View style={[styles.roadLine, { top: '75%', width: '100%', height: 10 }]} />
       </View>
 
-      {/* User Dot */}
       <View style={[styles.userDot, isNavigating && styles.userDotNavigating]}>
         <Ionicons
           name={isNavigating ? 'car-sport' : 'navigate'}
@@ -56,10 +49,9 @@ export default function MapSurface({ isNavigating }: MapSurfaceProps) {
         />
       </View>
 
-      {/* Web badge */}
       <View style={styles.regionBadge}>
         <Ionicons name="map" size={14} color={colors.primary} />
-        <Text style={styles.regionText}>محاكاة خارطة الرياض (الويب)</Text>
+        <Text style={styles.regionText}>خارطة الرياض (الويب)</Text>
       </View>
     </View>
   );
