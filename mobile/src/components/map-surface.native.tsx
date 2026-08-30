@@ -13,12 +13,11 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
-import { AppLocation } from '@/types/navigation';
-import { MOCK_LOCATIONS } from '@/constants/mock-locations';
+import { AppLocation, RoutePoint } from '@/types/navigation';
 
 export const FALLBACK_LOCATION = {
-  latitude: 24.7136,
-  longitude: 46.6753,
+  latitude: 31.9539,
+  longitude: 35.9106,
 };
 
 export type Coordinates = {
@@ -29,10 +28,13 @@ export type Coordinates = {
 type MapSurfaceProps = {
   startLocation: AppLocation;
   destination?: AppLocation | null;
+  /** Real road-based route geometry from OSRM. Overrides straight-line polyline when provided. */
+  routeGeometry?: RoutePoint[] | null;
   simulationLocation?: Coordinates | null;
   isNavigating?: boolean;
   onSelectLocation?: (loc: AppLocation) => void;
   recenterTrigger?: number;
+  focusNonce?: number;
 };
 
 const LEAFLET_HTML = `
@@ -160,20 +162,22 @@ const LEAFLET_HTML = `
     var map = L.map('map', {
       zoomControl: false,
       attributionControl: true
-    }).setView([24.7136, 46.6753], 13);
+    }).setView([31.9539, 35.9106], 13);
 
-    // OpenStreetMap tiles via CartoDB Voyager
-    L.tileLayer('https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png', {
-      maxZoom: 19,
+    var CARTO_API_KEY = 'eyJhbGciOiJIUzI1NiJ9.eyJhIjoiYWNfNjc4MmgzbDYiLCJqdGkiOiIxZDY5NmExMiIsImV4cCI6MTgxOTM5MzI2MH0.XLWY-BasSgUnZJOe6SVQupFv3w3Wu0IYGZxPy_P8LrE';
+
+    // High-performance OpenStreetMap tiles via CartoDB Voyager with API Key authentication
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?api_key=' + CARTO_API_KEY, {
+      maxZoom: 20,
       subdomains: 'abcd',
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
     }).addTo(map);
 
     var startMarker = null;
     var destMarker = null;
     var carMarker = null;
-    var destinationMarkers = {};
     var routePolyline = null;
+    var routeHalo = null;
 
     function createStartIcon() {
       return L.divIcon({
@@ -202,38 +206,19 @@ const LEAFLET_HTML = `
       });
     }
 
-    function createLandmarkIcon(id) {
-      var iconChar = id === '3' ? '✈️' : '📌';
-      return L.divIcon({
-        className: '',
-        html: '<div class="landmark-pin">' + iconChar + '</div>',
-        iconSize: [30, 30],
-        iconAnchor: [15, 15]
+    function fitBoth(start, dest) {
+      var bounds = L.latLngBounds([
+        [start.latitude, start.longitude],
+        [dest.latitude, dest.longitude]
+      ]);
+      map.fitBounds(bounds, {
+        paddingTopLeft: [50, 140],
+        paddingBottomRight: [50, 260],
+        maxZoom: 15,
+        animate: true
       });
     }
 
-    function renderLandmarks(locations) {
-      locations.forEach(function(loc) {
-        if (!destinationMarkers[loc.id]) {
-          var m = L.marker([loc.latitude, loc.longitude], {
-            icon: createLandmarkIcon(loc.id),
-            zIndexOffset: 300
-          }).addTo(map);
-
-          m.on('click', function() {
-            if (window.ReactNativeWebView) {
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'SELECT_LANDMARK',
-                id: loc.id
-              }));
-            }
-          });
-          destinationMarkers[loc.id] = m;
-        }
-      });
-    }
-
-    // Command listener
     window.onMessage = function(data) {
       try {
         var msg = typeof data === 'string' ? JSON.parse(data) : data;
@@ -244,9 +229,6 @@ const LEAFLET_HTML = `
           var sim = msg.simulationLocation;
           var isNav = msg.isNavigating;
 
-          renderLandmarks(msg.locations || []);
-
-          // 1. Update Start Marker
           if (start) {
             if (!startMarker) {
               startMarker = L.marker([start.latitude, start.longitude], {
@@ -258,7 +240,6 @@ const LEAFLET_HTML = `
             }
           }
 
-          // 2. Update Destination Marker
           if (dest) {
             if (!destMarker) {
               destMarker = L.marker([dest.latitude, dest.longitude], {
@@ -268,49 +249,19 @@ const LEAFLET_HTML = `
             } else {
               destMarker.setLatLng([dest.latitude, dest.longitude]);
             }
-          } else {
-            if (destMarker) {
-              map.removeLayer(destMarker);
-              destMarker = null;
-            }
+          } else if (destMarker) {
+            map.removeLayer(destMarker);
+            destMarker = null;
           }
 
-          // 3. Update Route Polyline & fitBounds
           if (start && dest) {
-            var coords = [
-              [start.latitude, start.longitude],
-              [dest.latitude, dest.longitude]
-            ];
-
-            if (!routePolyline) {
-              routePolyline = L.polyline(coords, {
-                color: '#0066FF',
-                weight: 6,
-                opacity: 0.9,
-                dashArray: '12, 8',
-                lineCap: 'round'
-              }).addTo(map);
-            } else {
-              routePolyline.setLatLngs(coords);
-            }
-
-            if (!isNav) {
-              var bounds = L.latLngBounds(coords);
-              map.fitBounds(bounds, {
-                paddingTopLeft: [50, 140],
-                paddingBottomRight: [50, 260],
-                maxZoom: 15,
-                animate: true
-              });
-            }
-          } else {
-            if (routePolyline) {
-              map.removeLayer(routePolyline);
-              routePolyline = null;
-            }
+            // Only draw straight-line fallback if no real route geometry exists yet
+            // Real geometry is drawn separately via DRAW_ROUTE_GEOMETRY message
+          } else if (routePolyline) {
+            map.removeLayer(routePolyline);
+            routePolyline = null;
           }
 
-          // 4. Update Car Marker (Navigation mode)
           if (isNav && sim) {
             if (!carMarker) {
               carMarker = L.marker([sim.latitude, sim.longitude], {
@@ -320,14 +271,42 @@ const LEAFLET_HTML = `
             } else {
               carMarker.setLatLng([sim.latitude, sim.longitude]);
             }
-          } else {
-            if (carMarker) {
-              map.removeLayer(carMarker);
-              carMarker = null;
-            }
+          } else if (carMarker) {
+            map.removeLayer(carMarker);
+            carMarker = null;
           }
-        } else if (msg.type === 'CENTER_CAMERA') {
-          map.flyTo([msg.lat, msg.lng], 14, { duration: 0.8 });
+        } else if (msg.type === 'CENTER_CAMERA' || msg.type === 'FOCUS_LOCATION') {
+          map.flyTo([msg.lat, msg.lng], msg.zoom || 15, { duration: 0.85 });
+        } else if (msg.type === 'FIT_BOUNDS' && msg.start && msg.dest) {
+          fitBoth(msg.start, msg.dest);
+        } else if (msg.type === 'DRAW_ROUTE_GEOMETRY') {
+          // Remove old route polylines
+          if (routePolyline) { map.removeLayer(routePolyline); routePolyline = null; }
+          if (routeHalo) { map.removeLayer(routeHalo); routeHalo = null; }
+
+          var geoPoints = msg.points; // [[lat, lng], ...]
+          if (!geoPoints || geoPoints.length < 2) return;
+
+          // White halo (bottom layer) for premium look
+          routeHalo = L.polyline(geoPoints, {
+            color: '#FFFFFF',
+            weight: 10,
+            opacity: 0.25,
+            lineCap: 'round',
+            lineJoin: 'round'
+          }).addTo(map);
+
+          // Blue route line (top layer)
+          routePolyline = L.polyline(geoPoints, {
+            color: '#0066FF',
+            weight: 5,
+            opacity: 0.95,
+            lineCap: 'round',
+            lineJoin: 'round'
+          }).addTo(map);
+        } else if (msg.type === 'CLEAR_ROUTE') {
+          if (routePolyline) { map.removeLayer(routePolyline); routePolyline = null; }
+          if (routeHalo) { map.removeLayer(routeHalo); routeHalo = null; }
         }
       } catch (e) {
         console.error('Error handling map command', e);
@@ -341,18 +320,23 @@ const LEAFLET_HTML = `
 export default function MapSurface({
   startLocation,
   destination,
+  routeGeometry,
   simulationLocation,
   isNavigating = false,
-  onSelectLocation,
   recenterTrigger,
+  focusNonce,
 }: MapSurfaceProps) {
   const webViewRef = useRef<WebView>(null);
   const isLoadedRef = useRef(false);
 
-  const syncState = useCallback(() => {
+  const postToMap = useCallback((payload: object) => {
     if (!isLoadedRef.current || !webViewRef.current) return;
+    const js = `if (window.onMessage) { window.onMessage(${JSON.stringify(payload)}); } true;`;
+    webViewRef.current.injectJavaScript(js);
+  }, []);
 
-    const payload = {
+  const syncState = useCallback(() => {
+    postToMap({
       type: 'SYNC_ROUTE_STATE',
       startLocation: {
         latitude: startLocation.latitude,
@@ -371,42 +355,62 @@ export default function MapSurface({
           }
         : null,
       isNavigating,
-      locations: MOCK_LOCATIONS,
-    };
-
-    const js = `if (window.onMessage) { window.onMessage(${JSON.stringify(payload)}); } true;`;
-    webViewRef.current.injectJavaScript(js);
-  }, [startLocation, destination, simulationLocation, isNavigating]);
+    });
+  }, [postToMap, startLocation, destination, simulationLocation, isNavigating]);
 
   useEffect(() => {
     syncState();
   }, [syncState]);
 
   useEffect(() => {
-    if (recenterTrigger !== undefined && isLoadedRef.current && webViewRef.current) {
-      const payload = {
-        type: 'CENTER_CAMERA',
-        lat: startLocation.latitude,
-        lng: startLocation.longitude,
-      };
-      webViewRef.current.injectJavaScript(
-        `if (window.onMessage) { window.onMessage(${JSON.stringify(payload)}); } true;`
-      );
-    }
-  }, [recenterTrigger, startLocation]);
+    if (!recenterTrigger) return;
+    postToMap({
+      type: 'CENTER_CAMERA',
+      lat: startLocation.latitude,
+      lng: startLocation.longitude,
+      zoom: 15,
+    });
+  }, [recenterTrigger, startLocation, postToMap]);
 
-  const handleMessage = (event: WebViewMessageEvent) => {
-    try {
-      const data = JSON.parse(event.nativeEvent.data);
-      if (data.type === 'SELECT_LANDMARK' && onSelectLocation) {
-        const found = MOCK_LOCATIONS.find((l) => l.id === data.id);
-        if (found) {
-          onSelectLocation(found);
-        }
-      }
-    } catch {
-      // ignore
+  useEffect(() => {
+    if (!focusNonce) return;
+    if (destination) {
+      postToMap({
+        type: 'FIT_BOUNDS',
+        start: {
+          latitude: startLocation.latitude,
+          longitude: startLocation.longitude,
+        },
+        dest: {
+          latitude: destination.latitude,
+          longitude: destination.longitude,
+        },
+      });
+      return;
     }
+    postToMap({
+      type: 'FOCUS_LOCATION',
+      lat: startLocation.latitude,
+      lng: startLocation.longitude,
+      zoom: 16,
+    });
+  }, [focusNonce, destination, startLocation, postToMap]);
+
+  // Send real road geometry to Leaflet whenever OSRM returns it
+  useEffect(() => {
+    if (!isLoadedRef.current) return;
+    if (routeGeometry && routeGeometry.length >= 2) {
+      // Convert to [lat, lng] pairs that Leaflet expects
+      const points = routeGeometry.map((p) => [p.latitude, p.longitude]);
+      postToMap({ type: 'DRAW_ROUTE_GEOMETRY', points });
+    } else {
+      postToMap({ type: 'CLEAR_ROUTE' });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeGeometry, postToMap]);
+
+  const handleMessage = (_event: WebViewMessageEvent) => {
+    // Place selection is handled in React Native, not from map landmarks.
   };
 
   return (
@@ -424,6 +428,12 @@ export default function MapSurface({
         onLoadEnd={() => {
           isLoadedRef.current = true;
           syncState();
+          postToMap({
+            type: 'CENTER_CAMERA',
+            lat: startLocation.latitude,
+            lng: startLocation.longitude,
+            zoom: 14,
+          });
         }}
         onMessage={handleMessage}
       />

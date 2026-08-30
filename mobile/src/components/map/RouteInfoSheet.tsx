@@ -5,7 +5,7 @@
  */
 
 import React from 'react';
-import { StyleSheet, View, Text, Pressable } from 'react-native';
+import { StyleSheet, View, Text, Pressable, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/constants/colors';
 import { spacing } from '@/constants/spacing';
@@ -14,12 +14,15 @@ import { RouteInfo } from '@/types/navigation';
 
 interface RouteInfoSheetProps {
   routeInfo: RouteInfo;
+  /** True while the real route is being fetched from OSRM. */
+  isLoadingRoute?: boolean;
   onStartDrive: () => void;
   onCancel: () => void;
 }
 
 export function RouteInfoSheet({
   routeInfo,
+  isLoadingRoute = false,
   onStartDrive,
   onCancel,
 }: RouteInfoSheetProps) {
@@ -48,31 +51,38 @@ export function RouteInfoSheet({
         </View>
 
         {/* Stats Grid: Distance & ETA */}
-        <View style={styles.statsRow}>
-          {/* Distance */}
-          <View style={styles.statBox}>
-            <View style={styles.statIconBadge}>
-              <Ionicons name="analytics" size={18} color="#38BDF8" />
+        {isLoadingRoute ? (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator size="small" color="#38BDF8" />
+            <Text style={styles.loadingText}>جاري حساب المسار الحقيقي...</Text>
+          </View>
+        ) : (
+          <View style={styles.statsRow}>
+            {/* Distance */}
+            <View style={styles.statBox}>
+              <View style={styles.statIconBadge}>
+                <Ionicons name="analytics" size={18} color="#38BDF8" />
+              </View>
+              <View style={styles.statTexts}>
+                <Text style={styles.statValue}>{routeInfo.formattedDistance}</Text>
+                <Text style={styles.statLabel}>المسافة التقريبية</Text>
+              </View>
             </View>
-            <View style={styles.statTexts}>
-              <Text style={styles.statValue}>{routeInfo.formattedDistance}</Text>
-              <Text style={styles.statLabel}>المسافة التقريبية</Text>
+
+            <View style={styles.statDivider} />
+
+            {/* ETA */}
+            <View style={styles.statBox}>
+              <View style={styles.statIconBadge}>
+                <Ionicons name="time" size={18} color="#34D399" />
+              </View>
+              <View style={styles.statTexts}>
+                <Text style={styles.statValue}>{routeInfo.formattedDuration}</Text>
+                <Text style={styles.statLabel}>الوقت المقدر</Text>
+              </View>
             </View>
           </View>
-
-          <View style={styles.statDivider} />
-
-          {/* ETA */}
-          <View style={styles.statBox}>
-            <View style={styles.statIconBadge}>
-              <Ionicons name="time" size={18} color="#34D399" />
-            </View>
-            <View style={styles.statTexts}>
-              <Text style={styles.statValue}>{routeInfo.formattedDuration}</Text>
-              <Text style={styles.statLabel}>الوقت المقدر</Text>
-            </View>
-          </View>
-        </View>
+        )}
 
         {/* Action Buttons */}
         <View style={styles.actionsRow}>
@@ -234,5 +244,20 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.8,
+  },
+  loadingRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderRadius: 16,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  loadingText: {
+    ...typography.caption,
+    color: '#38BDF8',
+    fontWeight: '600',
   },
 });

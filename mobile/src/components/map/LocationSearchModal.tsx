@@ -1,9 +1,9 @@
 /**
  * LocationSearchModal
- * Modal sheet allowing the user to search and select either a Start location or a Destination.
+ * Real place search sheet for selecting Start or Destination.
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   StyleSheet,
   View,
@@ -13,17 +13,20 @@ import {
   Pressable,
   ScrollView,
   SafeAreaView,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/constants/colors';
 import { spacing } from '@/constants/spacing';
 import { typography } from '@/constants/typography';
-import { AppLocation } from '@/types/navigation';
-import { MOCK_LOCATIONS } from '@/constants/mock-locations';
+import { AppLocation, LocationSelectionMode, getLocationAddress, getLocationLabel } from '@/types/navigation';
+import { searchPlaces } from '@/services/places.service';
+
+const SEARCH_DEBOUNCE_MS = 450;
 
 interface LocationSearchModalProps {
   visible: boolean;
-  targetType: 'start' | 'destination';
+  selectionMode: LocationSelectionMode;
   currentGpsLocation: AppLocation;
   onClose: () => void;
   onSelect: (location: AppLocation) => void;
@@ -31,38 +34,93 @@ interface LocationSearchModalProps {
 
 export function LocationSearchModal({
   visible,
-  targetType,
+  selectionMode,
   currentGpsLocation,
   onClose,
   onSelect,
 }: LocationSearchModalProps) {
   const [query, setQuery] = useState('');
+  const [results, setResults] = useState<AppLocation[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
-  const isStart = targetType === 'start';
-  const title = isStart ? 'تحديد نقطة البداية' : 'تحديد الوجهة';
+  const isStart = selectionMode === 'START';
+  const title = isStart ? 'حدد نقطة الانطلاق' : 'إلى أين تريد الذهاب؟';
+  const placeholder = isStart ? 'ابحث عن نقطة الانطلاق...' : 'ابحث عن مكان حقيقي...';
 
-  const filteredLocations = useMemo(() => {
-    if (!query.trim()) return MOCK_LOCATIONS;
-    const q = query.toLowerCase();
-    return MOCK_LOCATIONS.filter(
-      (loc) =>
-        loc.nameAr.toLowerCase().includes(q) ||
-        loc.nameEn.toLowerCase().includes(q) ||
-        (loc.descriptionAr && loc.descriptionAr.toLowerCase().includes(q))
-    );
-  }, [query]);
+  useEffect(() => {
+    if (!visible) {
+      setQuery('');
+      setResults([]);
+      setIsLoading(false);
+      setErrorMessage(null);
+      requestIdRef.current += 1;
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
+      requestIdRef.current += 1;
+      setResults([]);
+      setIsLoading(false);
+      setErrorMessage(null);
+      return;
+    }
+
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    const controller = new AbortController();
+    setIsLoading(true);
+    setErrorMessage(null);
+
+    const timer = setTimeout(() => {
+      searchPlaces(trimmed, {
+        latitude: currentGpsLocation.latitude,
+        longitude: currentGpsLocation.longitude,
+        signal: controller.signal,
+      })
+        .then((places) => {
+          if (requestId !== requestIdRef.current) return;
+          setResults(places);
+          setErrorMessage(null);
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          if (requestId !== requestIdRef.current) return;
+          setResults([]);
+          setErrorMessage('تعذر البحث عن الأماكن. حاول مرة أخرى.');
+          console.warn('Place search error', error);
+        })
+        .finally(() => {
+          if (requestId === requestIdRef.current) {
+            setIsLoading(false);
+          }
+        });
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query, visible, currentGpsLocation.latitude, currentGpsLocation.longitude]);
 
   const handleSelectGps = () => {
     onSelect(currentGpsLocation);
-    setQuery('');
     onClose();
   };
 
   const handleSelectPlace = (loc: AppLocation) => {
     onSelect(loc);
-    setQuery('');
     onClose();
   };
+
+  const trimmedQuery = query.trim();
+  const showEmpty = !isLoading && trimmedQuery.length >= 2 && results.length === 0 && !errorMessage;
+  const showHint = trimmedQuery.length < 2 && !isLoading;
 
   return (
     <Modal
@@ -73,21 +131,19 @@ export function LocationSearchModal({
     >
       <View style={styles.modalOverlay}>
         <SafeAreaView style={styles.modalContainer}>
-          {/* Header */}
           <View style={styles.header}>
-            <Pressable onPress={onClose} style={styles.closeBtn}>
+            <Pressable onPress={onClose} style={styles.closeBtn} accessibilityLabel="إغلاق البحث">
               <Ionicons name="close" size={24} color={colors.white} />
             </Pressable>
             <Text style={styles.headerTitle}>{title}</Text>
             <View style={{ width: 32 }} />
           </View>
 
-          {/* Search Input */}
           <View style={styles.searchBar}>
             <Ionicons name="search" size={20} color={colors.textSecondary} />
             <TextInput
               style={styles.searchInput}
-              placeholder={isStart ? 'ابحث عن نقطة البداية...' : 'ابحث عن الوجهة المطلوبة...'}
+              placeholder={placeholder}
               placeholderTextColor="rgba(255,255,255,0.4)"
               value={query}
               onChangeText={setQuery}
@@ -101,51 +157,71 @@ export function LocationSearchModal({
             )}
           </View>
 
-          {/* Location Results List */}
           <ScrollView
             style={styles.scrollList}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.listContent}
           >
-            {/* Option: Current GPS Location */}
-            <Pressable
-              onPress={handleSelectGps}
-              style={({ pressed }) => [styles.gpsItem, pressed && styles.pressed]}
-            >
-              <View style={styles.gpsIconCircle}>
-                <Ionicons name="locate" size={20} color="#10B981" />
-              </View>
-              <View style={styles.itemTextCol}>
-                <Text style={styles.gpsTitle}>موقعي الحالي</Text>
-                <Text style={styles.gpsSubtitle}>استخدام إحداثيات GPS الحالية للسيارة</Text>
-              </View>
-              <View style={styles.badgeGps}>
-                <Text style={styles.badgeGpsText}>GPS</Text>
-              </View>
-            </Pressable>
+            {isStart && (
+              <Pressable
+                onPress={handleSelectGps}
+                style={({ pressed }) => [styles.gpsItem, pressed && styles.pressed]}
+              >
+                <View style={styles.gpsIconCircle}>
+                  <Ionicons name="locate" size={20} color="#10B981" />
+                </View>
+                <View style={styles.itemTextCol}>
+                  <Text style={styles.gpsTitle}>موقعي الحالي</Text>
+                  <Text style={styles.gpsSubtitle}>استخدام إحداثيات GPS الحالية</Text>
+                </View>
+                <View style={styles.badgeGps}>
+                  <Text style={styles.badgeGpsText}>GPS</Text>
+                </View>
+              </Pressable>
+            )}
 
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>أماكن ومعالم مشهورة</Text>
-            </View>
+            {isLoading && (
+              <View style={styles.stateBlock}>
+                <ActivityIndicator color="#38BDF8" />
+                <Text style={styles.stateText}>جاري البحث عن الأماكن...</Text>
+              </View>
+            )}
 
-            {filteredLocations.map((loc) => (
+            {errorMessage && !isLoading && (
+              <View style={styles.stateBlock}>
+                <Ionicons name="cloud-offline-outline" size={28} color={colors.textSecondary} />
+                <Text style={styles.stateText}>{errorMessage}</Text>
+              </View>
+            )}
+
+            {showHint && (
+              <View style={styles.stateBlock}>
+                <Ionicons name="location-outline" size={28} color={colors.textSecondary} />
+                <Text style={styles.stateText}>اكتب اسم مكان حقيقي لتحديد موقعه على الخريطة</Text>
+              </View>
+            )}
+
+            {showEmpty && (
+              <View style={styles.stateBlock}>
+                <Ionicons name="search-outline" size={28} color={colors.textSecondary} />
+                <Text style={styles.stateText}>لا توجد نتائج مطابقة لـ «{trimmedQuery}»</Text>
+              </View>
+            )}
+
+            {!isLoading && results.map((loc) => (
               <Pressable
                 key={loc.id}
                 onPress={() => handleSelectPlace(loc)}
                 style={({ pressed }) => [styles.locationItem, pressed && styles.pressed]}
               >
                 <View style={styles.locationIconCircle}>
-                  <Ionicons
-                    name={loc.id === '3' ? 'airplane' : 'location'}
-                    size={18}
-                    color={colors.primary}
-                  />
+                  <Ionicons name="location" size={18} color={colors.primary} />
                 </View>
                 <View style={styles.itemTextCol}>
-                  <Text style={styles.locationTitle}>{loc.nameAr}</Text>
-                  {loc.descriptionAr && (
-                    <Text style={styles.locationSubtitle}>{loc.descriptionAr}</Text>
-                  )}
+                  <Text style={styles.locationTitle}>{getLocationLabel(loc)}</Text>
+                  {getLocationAddress(loc) ? (
+                    <Text style={styles.locationSubtitle}>{getLocationAddress(loc)}</Text>
+                  ) : null}
                 </View>
                 <Ionicons name="chevron-back" size={18} color="rgba(255,255,255,0.2)" />
               </Pressable>
@@ -257,15 +333,16 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: 'bold',
   },
-  sectionHeader: {
-    marginTop: spacing.sm,
-    marginBottom: spacing.xs,
+  stateBlock: {
+    alignItems: 'center',
+    paddingVertical: spacing.xl,
+    gap: spacing.sm,
   },
-  sectionTitle: {
+  stateText: {
     ...typography.caption,
     color: colors.textSecondary,
-    textAlign: 'right',
-    fontWeight: '600',
+    textAlign: 'center',
+    paddingHorizontal: spacing.lg,
   },
   locationItem: {
     flexDirection: 'row-reverse',

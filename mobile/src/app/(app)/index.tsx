@@ -1,16 +1,9 @@
 /**
- * MapScreen — Route Planning Screen
- *
- * Provides a modern automotive Route Planning experience:
- * 1. Automatic GPS start location determination
- * 2. Start location customization
- * 3. Destination search and selection
- * 4. Route preview on OpenStreetMap with distance and ETA calculation
- * 5. One-tap launch into Driving Mode (/drive)
+ * MapScreen — Place search and start/destination selection.
  */
 
 import React, { useState } from 'react';
-import { StyleSheet, View, Text, Pressable, ScrollView } from 'react-native';
+import { StyleSheet, View, Text, Pressable, ScrollView, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/constants/colors';
@@ -22,42 +15,58 @@ import { RouteInfoSheet } from '@/components/map/RouteInfoSheet';
 import { LocationSearchModal } from '@/components/map/LocationSearchModal';
 import { useNavigation } from '@/context/NavigationContext';
 import { MOCK_LOCATIONS } from '@/constants/mock-locations';
-import { AppLocation } from '@/types/navigation';
+import { AppLocation, LocationSelectionMode } from '@/types/navigation';
 
 export default function MapScreen() {
   const router = useRouter();
   const {
-    userLocation,
+    currentGpsLocation,
     startLocation,
     destination,
     routeInfo,
+    isLoadingRoute,
     recenterTrigger,
     setStartLocation,
     setDestination,
-    swapStartAndDestination,
+    swapLocations,
     clearRoute,
     triggerRecenter,
+    refreshGpsLocation,
+    resetStartToGps,
+    isLoadingLocation,
   } = useNavigation();
 
-  // Search Modal state
   const [modalVisible, setModalVisible] = useState(false);
-  const [modalTarget, setModalTarget] = useState<'start' | 'destination'>('destination');
+  const [selectionMode, setSelectionMode] = useState<LocationSelectionMode>('DESTINATION');
+  const [focusNonce, setFocusNonce] = useState(0);
 
-  const handleOpenSearch = (target: 'start' | 'destination') => {
-    setModalTarget(target);
+  const handleLocateMe = async () => {
+    const loc = await refreshGpsLocation();
+    if (loc) {
+      setStartLocation(loc);
+    } else {
+      resetStartToGps();
+    }
+    triggerRecenter();
+  };
+
+  const openLocationSearch = (mode: LocationSelectionMode) => {
+    setSelectionMode(mode);
     setModalVisible(true);
   };
 
   const handleSelectLocationFromModal = (location: AppLocation) => {
-    if (modalTarget === 'start') {
+    if (selectionMode === 'START') {
       setStartLocation(location);
     } else {
       setDestination(location);
     }
+    setFocusNonce((prev) => prev + 1);
   };
 
-  const handleSelectLandmarkOnMap = (location: AppLocation) => {
+  const handleQuickDestination = (location: AppLocation) => {
     setDestination(location);
+    setFocusNonce((prev) => prev + 1);
   };
 
   const handleStartDrive = () => {
@@ -68,39 +77,48 @@ export default function MapScreen() {
 
   return (
     <View style={styles.container}>
-      {/* 1. OpenStreetMap Interactive Surface */}
       <MapSurface
         startLocation={startLocation}
         destination={destination}
-        onSelectLocation={handleSelectLandmarkOnMap}
+        routeGeometry={routeInfo?.routeGeometry}
         recenterTrigger={recenterTrigger}
+        focusNonce={focusNonce}
       />
 
-      {/* 2. Top Route Planning Floating Header */}
       <RoutePlanningHeader
         startLocation={startLocation}
         destination={destination}
-        onChangeStartPress={() => handleOpenSearch('start')}
-        onDestinationPress={() => handleOpenSearch('destination')}
-        onSwapPress={swapStartAndDestination}
-        onClearPress={clearRoute}
+        onChangeStartPress={() => openLocationSearch('START')}
+        onDestinationPress={() => openLocationSearch('DESTINATION')}
+        onSwapPress={() => {
+          swapLocations();
+          setFocusNonce((prev) => prev + 1);
+        }}
+        onClearPress={() => {
+          clearRoute();
+          setFocusNonce((prev) => prev + 1);
+        }}
       />
 
-      {/* 3. Floating "Locate Me" GPS Center Button */}
       <View style={styles.floatingButtons}>
         <Pressable
           accessibilityLabel="تحديد موقعي على الخريطة"
-          onPress={triggerRecenter}
-          style={({ pressed }) => [styles.locateButton, pressed && styles.pressed]}
+          onPress={handleLocateMe}
+          disabled={isLoadingLocation}
+          style={({ pressed }) => [styles.locateButton, pressed && styles.pressed, isLoadingLocation && styles.locateLoading]}
         >
-          <Ionicons name="locate" size={24} color="#0066FF" />
+          {isLoadingLocation ? (
+            <ActivityIndicator size="small" color="#0066FF" />
+          ) : (
+            <Ionicons name="locate" size={24} color="#0066FF" />
+          )}
         </Pressable>
       </View>
 
-      {/* 4. Bottom Panel: Route Info Sheet (if destination selected) OR Quick Destinations Card */}
       {routeInfo ? (
         <RouteInfoSheet
           routeInfo={routeInfo}
+          isLoadingRoute={isLoadingRoute}
           onStartDrive={handleStartDrive}
           onCancel={clearRoute}
         />
@@ -112,18 +130,17 @@ export default function MapScreen() {
                 <Ionicons name="navigate-circle" size={28} color="#0066FF" />
               </View>
               <View style={styles.welcomeTextCol}>
-                <Text style={styles.welcomeTitle}>تخطيط الرحلة 📍</Text>
-                <Text style={styles.welcomeSubtitle}>اختر وجهتك لاستعراض المسار وتقدير الوقت</Text>
+                <Text style={styles.welcomeTitle}>اختر نقطة الانطلاق والوجهة</Text>
+                <Text style={styles.welcomeSubtitle}>ابحث عن مكان حقيقي ليظهر مباشرة على الخريطة</Text>
               </View>
             </View>
 
-            {/* Quick destination chips */}
-            <Text style={styles.chipsLabel}>وجهات مقترحة في الرياض:</Text>
+            <Text style={styles.chipsLabel}>أماكن مقترحة:</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsScroll}>
               {MOCK_LOCATIONS.map((loc) => (
                 <Pressable
                   key={loc.id}
-                  onPress={() => setDestination(loc)}
+                  onPress={() => handleQuickDestination(loc)}
                   style={({ pressed }) => [styles.chip, pressed && styles.pressed]}
                 >
                   <Ionicons
@@ -132,7 +149,7 @@ export default function MapScreen() {
                     color="#0066FF"
                     style={{ marginLeft: 6 }}
                   />
-                  <Text style={styles.chipText}>{loc.nameAr}</Text>
+                  <Text style={styles.chipText}>{loc.name}</Text>
                 </Pressable>
               ))}
             </ScrollView>
@@ -140,11 +157,10 @@ export default function MapScreen() {
         </View>
       )}
 
-      {/* 5. Location Search & Picker Modal */}
       <LocationSearchModal
         visible={modalVisible}
-        targetType={modalTarget}
-        currentGpsLocation={userLocation}
+        selectionMode={selectionMode}
+        currentGpsLocation={currentGpsLocation}
         onClose={() => setModalVisible(false)}
         onSelect={handleSelectLocationFromModal}
       />
@@ -176,6 +192,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.35,
     shadowRadius: 10,
     elevation: 6,
+  },
+  locateLoading: {
+    borderColor: '#0066FF',
   },
   welcomePanelContainer: {
     position: 'absolute',

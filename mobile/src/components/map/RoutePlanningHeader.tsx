@@ -1,6 +1,6 @@
 /**
  * RoutePlanningHeader
- * Top floating card for Start Location (with change button) and Destination search selector.
+ * Google Maps-inspired start / destination selector.
  */
 
 import React from 'react';
@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/constants/colors';
 import { spacing } from '@/constants/spacing';
 import { typography } from '@/constants/typography';
-import { AppLocation } from '@/types/navigation';
+import { AppLocation, getLocationLabel } from '@/types/navigation';
 
 interface RoutePlanningHeaderProps {
   startLocation: AppLocation;
@@ -31,46 +31,48 @@ export function RoutePlanningHeader({
   return (
     <View style={styles.container}>
       <View style={styles.card}>
-        {/* Start Location Row */}
-        <View style={styles.row}>
+        <Pressable
+          onPress={onChangeStartPress}
+          style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+          accessibilityLabel="تحديد نقطة الانطلاق"
+        >
           <View style={styles.startDot}>
             <View style={styles.innerStartDot} />
           </View>
 
           <View style={styles.infoCol}>
-            <Text style={styles.label}>نقطة البداية</Text>
+            <Text style={styles.label}>نقطة الانطلاق</Text>
             <Text style={styles.locationName} numberOfLines={1}>
-              {startLocation.nameAr}
+              {startLocation.isGps ? 'موقعي الحالي' : getLocationLabel(startLocation)}
             </Text>
           </View>
 
-          <Pressable
-            onPress={onChangeStartPress}
-            style={({ pressed }) => [styles.changeButton, pressed && styles.pressed]}
-          >
-            <Text style={styles.changeText}>تغيير</Text>
-          </Pressable>
-        </View>
+          <View style={styles.changeButton}>
+            <Text style={styles.changeText}>بحث</Text>
+          </View>
+        </Pressable>
 
-        {/* Divider with Connector & Swap */}
         <View style={styles.dividerRow}>
           <View style={styles.connectorLine} />
           <View style={styles.dividerHLine} />
-          {destination && (
-            <Pressable
-              onPress={onSwapPress}
-              style={({ pressed }) => [styles.swapButton, pressed && styles.pressed]}
-              accessibilityLabel="تبديل نقطة البداية والوجهة"
-            >
-              <Ionicons name="swap-vertical" size={16} color={colors.primary} />
-            </Pressable>
-          )}
+          <Pressable
+            onPress={onSwapPress}
+            disabled={!destination}
+            style={({ pressed }) => [
+              styles.swapButton,
+              !destination && styles.swapDisabled,
+              pressed && styles.pressed,
+            ]}
+            accessibilityLabel="تبديل نقطة الانطلاق والوجهة"
+          >
+            <Ionicons name="swap-vertical" size={16} color={destination ? colors.primary : 'rgba(255,255,255,0.25)'} />
+          </Pressable>
         </View>
 
-        {/* Destination Row */}
         <Pressable
           onPress={onDestinationPress}
           style={({ pressed }) => [styles.row, styles.destRow, pressed && styles.pressed]}
+          accessibilityLabel="تحديد الوجهة"
         >
           <View style={styles.destDot}>
             <Ionicons name="location" size={14} color={colors.white} />
@@ -85,7 +87,7 @@ export function RoutePlanningHeader({
               ]}
               numberOfLines={1}
             >
-              {destination ? destination.nameAr : 'إلى أين تريد الذهاب؟'}
+              {destination ? getLocationLabel(destination) : 'إلى أين تريد الذهاب؟'}
             </Text>
           </View>
 
@@ -93,6 +95,7 @@ export function RoutePlanningHeader({
             <Pressable
               onPress={onClearPress}
               style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
+              accessibilityLabel="مسح الوجهة"
             >
               <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
             </Pressable>
@@ -226,6 +229,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  swapDisabled: {
+    opacity: 0.45,
   },
   iconBtn: {
     padding: 4,

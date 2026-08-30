@@ -7,11 +7,11 @@ import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/constants/colors';
 import { spacing } from '@/constants/spacing';
-import { AppLocation } from '@/types/navigation';
+import { AppLocation, RoutePoint } from '@/types/navigation';
 
 export const FALLBACK_LOCATION = {
-  latitude: 24.7136,
-  longitude: 46.6753,
+  latitude: 31.9539,
+  longitude: 35.9106,
 };
 
 export type Coordinates = {
@@ -22,10 +22,13 @@ export type Coordinates = {
 type MapSurfaceProps = {
   startLocation: AppLocation;
   destination?: AppLocation | null;
+  /** Real road-based route geometry (unused on web fallback). */
+  routeGeometry?: RoutePoint[] | null;
   simulationLocation?: Coordinates | null;
   isNavigating?: boolean;
   onSelectLocation?: (loc: AppLocation) => void;
   recenterTrigger?: number;
+  focusNonce?: number;
 };
 
 export default function MapSurface({ isNavigating }: MapSurfaceProps) {
@@ -51,7 +54,7 @@ export default function MapSurface({ isNavigating }: MapSurfaceProps) {
 
       <View style={styles.regionBadge}>
         <Ionicons name="map" size={14} color={colors.primary} />
-        <Text style={styles.regionText}>خارطة الرياض (الويب)</Text>
+        <Text style={styles.regionText}>خارطة الأردن - عمان (الويب)</Text>
       </View>
     </View>
   );

@@ -3,7 +3,7 @@
  * Smart driving history with summary, filters and grouped trip cards
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,16 +11,20 @@ import {
   ScrollView,
   Pressable,
   SafeAreaView,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { TripCard } from '@/components/TripCard';
-import { MOCK_TRIPS, MOCK_SUMMARY } from '@/constants/mock-trips';
 import { FilterPeriod } from '@/types/trips';
 import { filterTrips, groupTripsByDate, formatTotalTime } from '@/utils/trip-utils';
 import { colors } from '@/constants/colors';
 import { spacing } from '@/constants/spacing';
 import { typography } from '@/constants/typography';
+import { useAuth } from '@/context/AuthContext';
+import { TripsService, TripResponse } from '@/services/trips.service';
 
 const FILTER_OPTIONS: { key: FilterPeriod; label: string }[] = [
   { key: 'all', label: 'الكل' },
@@ -31,23 +35,101 @@ const FILTER_OPTIONS: { key: FilterPeriod; label: string }[] = [
 
 export default function TripsScreen() {
   const router = useRouter();
+  const { token } = useAuth();
   const [activeFilter, setActiveFilter] = useState<FilterPeriod>('all');
+  const [trips, setTrips] = useState<TripResponse[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch trips from backend
+  const fetchTrips = useCallback(async () => {
+    if (!token) return;
+
+    try {
+      setError(null);
+      const fetchedTrips = await TripsService.getTrips(token);
+      setTrips(fetchedTrips);
+    } catch (err) {
+      console.error('Failed to fetch trips:', err);
+      setError('فشل تحميل الرحلات');
+    }
+  }, [token]);
+
+  // Initial load
+  useEffect(() => {
+    setLoading(true);
+    fetchTrips().finally(() => setLoading(false));
+  }, []);
+
+  // Refetch when screen is focused
+  useFocusEffect(
+    useCallback(() => {
+      fetchTrips();
+    }, [fetchTrips])
+  );
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchTrips();
+    setRefreshing(false);
+  };
+
+  // Convert TripResponse to internal Trip type for filtering/grouping
+  const mockTrips = useMemo(() => trips.map((trip, idx) => ({
+    id: `trip-${idx}`,
+    date: new Date(trip.startedAt),
+    distanceKm: trip.distanceKm ?? 0,
+    durationMin: trip.durationMin ?? 0,
+    durationMinutes: trip.durationMin ?? 0,
+    status: 'completed' as const,
+    safetyScore: trip.drivingScore ?? 75,
+    speedViolations: trip.speedViolations,
+    avgSpeed: trip.avgSpeed ?? 0,
+    maxSpeed: trip.maxSpeed ?? 0,
+    origin: 'Trip',
+    destination: 'End',
+  } as any)), [trips]);
 
   const filtered = useMemo(
-    () => filterTrips(MOCK_TRIPS, activeFilter),
-    [activeFilter]
+    () => filterTrips(mockTrips, activeFilter),
+    [activeFilter, mockTrips]
   );
 
   const grouped = useMemo(() => groupTripsByDate(filtered), [filtered]);
+
+  // Calculate summary stats
+  const summary = useMemo(() => {
+    if (trips.length === 0) return null;
+    
+    const totalDistance = trips.reduce((sum, t) => sum + (t.distanceKm ?? 0), 0);
+    const totalDuration = trips.reduce((sum, t) => sum + (t.durationMin ?? 0), 0);
+    const avgScore = trips.reduce((sum, t) => sum + (t.drivingScore ?? 0), 0) / trips.length;
+    
+    return {
+      totalTrips: trips.length,
+      totalDistance: parseFloat(totalDistance.toFixed(1)),
+      totalDuration,
+      overallSafetyScore: Math.round(avgScore),
+    };
+  }, [trips]);
 
   const handleTripPress = (tripId: string) => {
     router.push({ pathname: '/(app)/trip-details', params: { tripId } });
   };
 
+  if (loading) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#0066FF" />
+      </SafeAreaView>
+    );
+  }
+
   const scoreColor =
-    MOCK_SUMMARY.overallSafetyScore >= 90
+    summary && summary.overallSafetyScore >= 90
       ? colors.success
-      : MOCK_SUMMARY.overallSafetyScore >= 75
+      : summary && summary.overallSafetyScore >= 75
       ? colors.info
       : colors.warning;
 
@@ -62,56 +144,66 @@ export default function TripsScreen() {
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
+        {error && (
+          <View style={styles.errorBanner}>
+            <Ionicons name="alert-circle" size={16} color={colors.error} />
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
+
         {/* Driving Summary Card */}
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryRow}>
-            {/* Score */}
-            <View style={styles.scoreBox}>
-              <Text style={[styles.scoreValue, { color: scoreColor }]}>
-                {MOCK_SUMMARY.overallSafetyScore}
-              </Text>
-              <Text style={styles.scoreSubLabel}>/ 100</Text>
-              <Text style={styles.scoreTitle}>مؤشر الأمان</Text>
-            </View>
-
-            <View style={styles.summaryDivider} />
-
-            {/* Stats */}
-            <View style={styles.statsGrid}>
-              <View style={styles.statItem}>
-                <Ionicons name="car-sport" size={16} color={colors.primary} />
-                <Text style={styles.statValue}>{MOCK_SUMMARY.totalTrips}</Text>
-                <Text style={styles.statLabel}>رحلة</Text>
-              </View>
-              <View style={styles.statItem}>
-                <Ionicons name="trail-sign" size={16} color={colors.success} />
-                <Text style={styles.statValue}>{MOCK_SUMMARY.totalDistanceKm}</Text>
-                <Text style={styles.statLabel}>كم</Text>
-              </View>
-              <View style={styles.statItem}>
-                <Ionicons name="time" size={16} color={colors.warning} />
-                <Text style={styles.statValue}>
-                  {formatTotalTime(MOCK_SUMMARY.totalDrivingMinutes)}
+        {summary && (
+          <View style={styles.summaryCard}>
+            <View style={styles.summaryRow}>
+              {/* Score */}
+              <View style={styles.scoreBox}>
+                <Text style={[styles.scoreValue, { color: scoreColor }]}>
+                  {summary.overallSafetyScore}
                 </Text>
-                <Text style={styles.statLabel}>وقت القيادة</Text>
+                <Text style={styles.scoreSubLabel}>/ 100</Text>
+                <Text style={styles.scoreTitle}>مؤشر الأمان</Text>
+              </View>
+
+              <View style={styles.summaryDivider} />
+
+              {/* Stats */}
+              <View style={styles.statsGrid}>
+                <View style={styles.statItem}>
+                  <Ionicons name="car-sport" size={16} color={colors.primary} />
+                  <Text style={styles.statValue}>{summary.totalTrips}</Text>
+                  <Text style={styles.statLabel}>رحلة</Text>
+                </View>
+                <View style={styles.statItem}>
+                  <Ionicons name="trail-sign" size={16} color={colors.success} />
+                  <Text style={styles.statValue}>{summary.totalDistance}</Text>
+                  <Text style={styles.statLabel}>كم</Text>
+                </View>
+                <View style={styles.statItem}>
+                  <Ionicons name="time" size={16} color={colors.warning} />
+                  <Text style={styles.statValue}>
+                    {formatTotalTime(summary.totalDuration)}
+                  </Text>
+                  <Text style={styles.statLabel}>وقت القيادة</Text>
+                </View>
               </View>
             </View>
-          </View>
 
-          {/* Score progress bar */}
-          <View style={styles.progressBg}>
-            <View
-              style={[
-                styles.progressFill,
-                {
-                  width: `${MOCK_SUMMARY.overallSafetyScore}%`,
-                  backgroundColor: scoreColor,
-                },
-              ]}
-            />
+            {/* Score progress bar */}
+            <View style={styles.progressBg}>
+              <View
+                style={[
+                  styles.progressFill,
+                  {
+                    width: `${summary.overallSafetyScore}%`,
+                    backgroundColor: scoreColor,
+                  },
+                ]}
+              />
+            </View>
           </View>
-        </View>
+        )}
 
         {/* Filter Chips */}
         <ScrollView
@@ -136,21 +228,27 @@ export default function TripsScreen() {
         </ScrollView>
 
         {/* Grouped Trip List */}
-        {grouped.length === 0 ? (
+        {trips.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="car-outline" size={56} color={colors.border} />
             <Text style={styles.emptyTitle}>لا توجد رحلات</Text>
-            <Text style={styles.emptySubtitle}>لم تقم بأي رحلات في هذه الفترة</Text>
+            <Text style={styles.emptySubtitle}>ابدأ برحلتك الأولى الآن!</Text>
+          </View>
+        ) : grouped.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Ionicons name="filter" size={56} color={colors.border} />
+            <Text style={styles.emptyTitle}>لا توجد نتائج</Text>
+            <Text style={styles.emptySubtitle}>جرب تغيير الفلتر</Text>
           </View>
         ) : (
           grouped.map((group) => (
             <View key={group.label}>
               <Text style={styles.groupLabel}>{group.label}</Text>
-              {group.trips.map((trip) => (
+              {group.trips.map((trip, idx) => (
                 <TripCard
-                  key={trip.id}
+                  key={`${group.label}-${idx}`}
                   trip={trip}
-                  onPress={(t) => handleTripPress(t.id)}
+                  onPress={(t) => handleTripPress(trips[trips.length - idx - 1].id)}
                 />
               ))}
             </View>
@@ -308,5 +406,22 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textSecondary,
     textAlign: 'center',
+  },
+  errorBanner: {
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderRadius: 12,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: spacing.sm,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.error,
+  },
+  errorText: {
+    color: colors.error,
+    flex: 1,
+    textAlign: 'right',
+    ...typography.caption,
   },
 });

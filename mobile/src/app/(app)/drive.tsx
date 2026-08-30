@@ -7,10 +7,11 @@
  * - Trip progress bar & live distance/ETA countdown
  * - Fullscreen OpenStreetMap tracking the car's geographic position
  * - Safe exit / End Drive action
+ * - Trip logging to backend
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, Pressable, Alert, SafeAreaView } from 'react-native';
+import { StyleSheet, View, Text, Pressable, Alert, SafeAreaView, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/constants/colors';
@@ -18,6 +19,8 @@ import { spacing } from '@/constants/spacing';
 import { typography } from '@/constants/typography';
 import MapSurface from '@/components/map-surface';
 import { useNavigation } from '@/context/NavigationContext';
+import { useAuth } from '@/context/AuthContext';
+import { TripsService } from '@/services/trips.service';
 
 const INSTRUCTIONS = [
   'اتجه نحو الشمال على طريق الملك فهد',
@@ -29,6 +32,7 @@ const INSTRUCTIONS = [
 
 export default function DriveScreen() {
   const router = useRouter();
+  const { token } = useAuth();
   const {
     startLocation,
     destination,
@@ -36,75 +40,161 @@ export default function DriveScreen() {
     simulationLocation,
     isNavigating,
     navigationProgress,
+    currentTripId,
     startNavigation,
     endNavigation,
     setNavigationProgress,
     setSimulationLocation,
+    addTripPoint,
+    saveTripToBackend,
+    clearTrip,
   } = useNavigation();
 
   const [speed, setSpeed] = useState(0);
   const [currentInstruction, setCurrentInstruction] = useState(INSTRUCTIONS[0]);
   const [remainingDistance, setRemainingDistance] = useState(routeInfo?.distanceKm ?? 10);
   const [remainingMinutes, setRemainingMinutes] = useState(routeInfo?.estimatedMinutes ?? 15);
+  const [isSaving, setIsSaving] = useState(false);
+  
+  // Track speeds for statistics
+  const speedsRef = useRef<number[]>([]);
+  const startTimeRef = useRef<Date>(new Date());
 
-  // Initialize navigation on mount
+  // Create trip on mount
   useEffect(() => {
-    startNavigation();
+    const initializeTrip = async () => {
+      if (!token || !startLocation || !destination) {
+        console.error('[Drive] Missing token or locations');
+        return;
+      }
+
+      try {
+        console.log('[Drive] Creating new trip...');
+        const trip = await TripsService.createTrip(
+          {
+            startedAt: new Date().toISOString(),
+          },
+          token
+        );
+        
+        console.log(`[Drive] Trip created: ${trip.id}`);
+        startNavigation(trip.id);
+      } catch (err) {
+        console.error('[Drive] Failed to create trip:', err);
+        Alert.alert('خطأ', 'فشل إنشاء الرحلة');
+        router.back();
+      }
+    };
+
+    initializeTrip();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Driving Simulation Loop
+  // Use a ref to track progress so the interval doesn't need the functional setState form
+  const progressRef = useRef(0);
+
+  // Driving Simulation Loop — collect GPS points
   useEffect(() => {
-    if (!startLocation || !destination) return;
+    if (!startLocation || !destination || !currentTripId) return;
+
+    progressRef.current = 0;
+    speedsRef.current = [];
+    startTimeRef.current = new Date();
 
     const timer = setInterval(() => {
-      setNavigationProgress((prev) => {
-        const next = prev + 0.02; // ~50 seconds for full simulation
+      const next = progressRef.current + 0.02; // ~50 seconds for full simulation
 
-        if (next >= 1) {
-          clearInterval(timer);
-          endNavigation();
-          Alert.alert('وصلت بالسلامة! 🎉', 'لقد وصلت إلى وجهتك المحددة بأمان.', [
-            { text: 'العودة للخريطة', onPress: () => router.back() },
-          ]);
-          return 0;
-        }
+      if (next >= 1) {
+        clearInterval(timer);
+        progressRef.current = 0;
+        setNavigationProgress(0);
+        
+        // Trip completed — save to backend
+        handleTripCompleted();
+        return;
+      }
 
-        // Interpolate geographic position between start and destination
-        const interpLat =
-          startLocation.latitude + (destination.latitude - startLocation.latitude) * next;
-        const interpLng =
-          startLocation.longitude + (destination.longitude - startLocation.longitude) * next;
+      progressRef.current = next;
+      setNavigationProgress(next);
 
-        setSimulationLocation({ latitude: interpLat, longitude: interpLng });
+      // Interpolate geographic position between start and destination
+      const interpLat =
+        startLocation.latitude + (destination.latitude - startLocation.latitude) * next;
+      const interpLng =
+        startLocation.longitude + (destination.longitude - startLocation.longitude) * next;
 
-        // Speed fluctuation (65 - 110 km/h)
-        const currentSpeed = Math.floor(65 + Math.random() * 45);
-        setSpeed(currentSpeed);
+      setSimulationLocation({ latitude: interpLat, longitude: interpLng });
 
-        // Update remaining stats
-        if (routeInfo) {
-          const remDist = Math.max(0, parseFloat((routeInfo.distanceKm * (1 - next)).toFixed(1)));
-          const remTime = Math.max(1, Math.round(routeInfo.estimatedMinutes * (1 - next)));
-          setRemainingDistance(remDist);
-          setRemainingMinutes(remTime);
-        }
+      // Speed fluctuation (65 - 110 km/h)
+      const currentSpeed = Math.floor(65 + Math.random() * 45);
+      setSpeed(currentSpeed);
+      speedsRef.current.push(currentSpeed);
 
-        // Update instruction banner step
-        const step = Math.floor(next * INSTRUCTIONS.length);
-        if (step < INSTRUCTIONS.length) {
-          setCurrentInstruction(INSTRUCTIONS[step]);
-        }
+      // Record GPS point
+      addTripPoint(interpLat, interpLng, currentSpeed);
 
-        return next;
-      });
+      // Update remaining stats
+      if (routeInfo) {
+        const remDist = Math.max(0, parseFloat((routeInfo.distanceKm * (1 - next)).toFixed(1)));
+        const remTime = Math.max(1, Math.round(routeInfo.estimatedMinutes * (1 - next)));
+        setRemainingDistance(remDist);
+        setRemainingMinutes(remTime);
+      }
+
+      // Update instruction banner step
+      const step = Math.floor(next * INSTRUCTIONS.length);
+      if (step < INSTRUCTIONS.length) {
+        setCurrentInstruction(INSTRUCTIONS[step]);
+      }
     }, 1000);
 
     return () => {
       clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startLocation, destination, routeInfo]);
+  }, [startLocation, destination, currentTripId, routeInfo]);
+
+  const handleTripCompleted = async () => {
+    if (!currentTripId || !routeInfo) return;
+
+    // Calculate statistics
+    const avgSpeed = speedsRef.current.length > 0
+      ? Math.round(speedsRef.current.reduce((a, b) => a + b, 0) / speedsRef.current.length)
+      : 0;
+    const maxSpeed = speedsRef.current.length > 0 ? Math.max(...speedsRef.current) : 0;
+    const durationMin = Math.round((Date.now() - startTimeRef.current.getTime()) / 60000);
+
+    const tripStats = {
+      distanceKm: parseFloat(routeInfo.distanceKm.toFixed(2)),
+      durationMin,
+      avgSpeed,
+      maxSpeed,
+      speedViolations: speedsRef.current.filter((s) => s > 80).length,
+      drivingScore: Math.max(50, Math.min(100, 100 - speedsRef.current.filter((s) => s > 80).length * 2)),
+    };
+
+    console.log('[Drive] Trip completed with stats:', tripStats);
+    
+    setIsSaving(true);
+    endNavigation();
+
+    const savedTripId = await saveTripToBackend(tripStats);
+    setIsSaving(false);
+
+    if (savedTripId) {
+      Alert.alert(
+        'تم حفظ الرحلة بنجاح! 🎉',
+        `${tripStats.distanceKm} كم\n${tripStats.durationMin} دقيقة\nدرجة القيادة: ${tripStats.drivingScore}%`,
+        [{ text: 'العودة للخريطة', onPress: () => router.back() }]
+      );
+    } else {
+      Alert.alert(
+        'وصلت بالسلامة',
+        'لكن حدث خطأ في حفظ الرحلة.',
+        [{ text: 'العودة للخريطة', onPress: () => router.back() }]
+      );
+    }
+  };
 
   const handleEndDrivePress = () => {
     Alert.alert('إنهاء الرحلة', 'هل أنت متأكد من رغبتك في إنهاء وضع القيادة؟', [
@@ -114,6 +204,7 @@ export default function DriveScreen() {
         style: 'destructive',
         onPress: () => {
           endNavigation();
+          clearTrip();
           router.back();
         },
       },
@@ -156,7 +247,9 @@ export default function DriveScreen() {
 
           <View style={styles.statusBadge}>
             <View style={styles.greenDot} />
-            <Text style={styles.statusText}>وضع القيادة النشط 🚗</Text>
+            <Text style={styles.statusText}>
+              {isSaving ? 'جاري حفظ الرحلة...' : 'وضع القيادة النشط 🚗'}
+            </Text>
           </View>
         </View>
 
@@ -185,10 +278,17 @@ export default function DriveScreen() {
           {/* Cancel / End Drive Button */}
           <Pressable
             onPress={handleEndDrivePress}
-            style={({ pressed }) => [styles.endDriveButton, pressed && styles.pressed]}
+            disabled={isSaving}
+            style={({ pressed }) => [styles.endDriveButton, pressed && styles.pressed, isSaving && styles.endDriveButtonDisabled]}
           >
-            <Ionicons name="stop-circle" size={20} color={colors.white} style={{ marginLeft: 8 }} />
-            <Text style={styles.endDriveText}>إنهاء الرحلة</Text>
+            {isSaving ? (
+              <ActivityIndicator size="small" color={colors.white} style={{ marginLeft: 8 }} />
+            ) : (
+              <Ionicons name="stop-circle" size={20} color={colors.white} style={{ marginLeft: 8 }} />
+            )}
+            <Text style={styles.endDriveText}>
+              {isSaving ? 'جاري الحفظ...' : 'إنهاء الرحلة'}
+            </Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -358,6 +458,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 10,
     elevation: 4,
+  },
+  endDriveButtonDisabled: {
+    backgroundColor: '#A0A0A0',
+    shadowColor: '#A0A0A0',
   },
   endDriveText: {
     color: colors.white,
